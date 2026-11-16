@@ -155,6 +155,10 @@ object AppError:
     def message = s"Недостаточно свободного места (требуется $needBytes байт)"
   final case class SourceMissing(path: String) extends AppError:
     def message = s"Источник недоступен: $path"
+  final case class InvalidSourceIndex(index: Int) extends AppError:
+    def message = s"Неверный индекс источника: $index"
+  final case class VersionNotFound(id: String) extends AppError:
+    def message = s"Версия '$id' не найдена"
   final case class FileUnreadable(path: String, reason: String) extends AppError:
     def message = s"Файл не читается: $path ($reason)"
   final case class FileChangedDuringCopy(path: String) extends AppError:

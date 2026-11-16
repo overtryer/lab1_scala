@@ -1,5 +1,4 @@
-import java.nio.file.{Files, Paths}
-import java.time.Instant
+import java.nio.file.Paths
 import scala.jdk.CollectionConverters.*
 import javax.crypto.spec.SecretKeySpec
 
@@ -40,11 +39,14 @@ class CreateHandler extends CommandHandler:
 
       if choice == "1" then
         val keyDir = Paths.get(ctx.config.keyDirectory)
-        Files.createDirectories(keyDir)
-        val keyFile = keyDir.resolve(s"${path.getFileName}.key")
-        Files.writeString(keyFile, keyStr.value)
-        ctx.ui.println(s"Ключ сохранен в: ${keyFile.toAbsolutePath}")
-        ctx.logger.info(s"Ключ шифрования сохранен в файл: $keyFile")
+        BusinessLogic.saveKeyToFile(keyDir, s"${path.getFileName}.key", keyStr.value) match
+          case Right(keyFile) =>
+            ctx.ui.println(s"Ключ сохранен в: ${keyFile.toAbsolutePath}")
+            ctx.logger.info(s"Ключ шифрования сохранен в файл: $keyFile")
+          case Left(err) =>
+            ctx.ui.println(s"Ошибка сохранения ключа: ${err.message}")
+            ctx.logger.error(s"Не удалось сохранить ключ: ${err.message}")
+            return state
       else
         ctx.ui.println(s"КЛЮЧ: ${keyStr.value}")
         ctx.ui.println("Подтвердите, что ключ сохранен (y):")
@@ -62,15 +64,9 @@ class CreateHandler extends CommandHandler:
       else
         val newId = SourceId(sourcesList.map(_.id.value).maxOption.getOrElse(0L) + 1L)
         sourcesList = sourcesList :+ Source(newId, Paths.get(p))
-
-    val newSession = StorageSession(
-      storageFile = path, name = storeName, encrypted = isEncrypted,
-      manifest = Manifest(VersionId(0), Instant.now(), Map.empty),
-      versions = Nil, sources = sourcesList, key = keyOpt
-    )
-
-    Storage.createNew(path, newSession, keyOpt) match
-      case Right(_) =>
+    
+    BusinessLogic.createStorage(ctx.storage, path, storeName, isEncrypted, sourcesList, keyOpt) match
+      case Right(newSession) =>
         ctx.ui.println(s"Хранилище создано по пути: ${path.toAbsolutePath}")
         ctx.logger.info(s"Создано хранилище: $path, Источников: ${sourcesList.size}, Шифрование: $isEncrypted")
         AppState.Opened(newSession)

@@ -106,10 +106,11 @@ object Storage:
     "sources" -> ujson.Arr.from(s.sources.map(sourceToJson))
   )
 
-  private def sessionFromJson(j: ujson.Value): StorageSession =
+  // path теперь передается явно, null больше не нужен
+  private def sessionFromJson(j: ujson.Value, path: Path): StorageSession =
     val o = j.obj
     StorageSession(
-      storageFile = null,
+      storageFile = path,
       name = o("name").str,
       encrypted = o("encrypted").bool,
       manifest = manifestFromJson(o("manifest")),
@@ -132,16 +133,26 @@ object Storage:
   def readSession(path: Path, key: Option[SecretKeySpec]): Either[AppError, StorageSession] =
     if !Files.exists(path) then Left(AppError.StorageNotFound(path.toString))
     else
-      Try {
-        Using.resource(ZipFile(path.toFile)) { zip =>
-          val entry = Option(zip.getEntry("session.json"))
-            .getOrElse(throw new RuntimeException("В архиве нет session.json"))
-          Using.resource(zip.getInputStream(entry)) { is =>
-            val content = new String(is.readAllBytes(), "UTF-8")
-            sessionFromJson(ujson.read(content)).copy(storageFile = path, key = key)
-          }
+      Try(ZipFile(path.toFile)).toEither
+        .left.map(e => AppError.StorageCorrupted(s"Не удалось открыть архив: ${e.getMessage}"))
+        .flatMap { zip =>
+          try
+            Option(zip.getEntry("session.json"))
+              .toRight(AppError.StorageCorrupted("В архиве нет session.json"))
+              .flatMap { entry =>
+                Try(Using.resource(zip.getInputStream(entry))(is => new String(is.readAllBytes(), "UTF-8")))
+                  .toEither
+                  .left.map(e => AppError.StorageIoError(s"Ошибка чтения session.json: ${e.getMessage}"))
+              }
+              .flatMap { content =>
+                Try(ujson.read(content)).toEither
+                  .left.map(e => AppError.StorageCorrupted(s"Ошибка парсинга JSON: ${e.getMessage}"))
+              }
+              .map { json =>
+                sessionFromJson(json, path).copy(key = key)
+              }
+          finally zip.close()
         }
-      }.toEither.left.map(e => AppError.StorageCorrupted(e.getMessage))
 
   def saveSession(session: StorageSession, filesToAdd: Map[Hash, Path], key: Option[SecretKeySpec], config: AppConfig): Either[AppError, Unit] =
     val containerPath = session.storageFile
@@ -181,7 +192,7 @@ object Storage:
 
   private def collectRequiredHashes(session: StorageSession, config: AppConfig): Set[String] =
     val currentHashes = session.manifest.files.values.map(_.hash.hex).toSet
-    
+
     val historicalHashes = session.versions
       .sortBy(_.createdAt)(using Ordering[Instant].reverse)
       .flatMap(_.manifest.files.values)
@@ -191,7 +202,7 @@ object Storage:
       .map(_.hex)
       .toSet
 
-    currentHashes ++ historicalHashes      
+    currentHashes ++ historicalHashes
 
   private def copyOldBlobs(oldZip: ZipFile, zos: ZipOutputStream, requiredHashes: Set[String]): Either[AppError, Unit] =
     try
@@ -212,60 +223,67 @@ object Storage:
 
   private def copyNewBlobs(oldZip: ZipFile, zos: ZipOutputStream, filesToAdd: Map[Hash, Path], key: Option[SecretKeySpec], config: AppConfig): Either[AppError, Unit] =
     val scanner = Scanner(config.hashAlgorithm)
-    filesToAdd.foldLeft[Either[AppError, Unit]](Right(())) {
-      case (Left(err), _) => Left(err)
-      case (Right(_), (hash, filePath)) =>
+    filesToAdd.foldLeft[Either[AppError, Unit]](Right(())) { case (acc, (hash, filePath)) =>
+      acc.flatMap { _ =>
         val entryName = s"blobs/${hash.hex}"
         if oldZip.getEntry(entryName) != null then Right(())
         else
-          try
-            val currentHash = scanner.hashFile(filePath)
-            if currentHash != hash then
-              Left(AppError.FileChangedDuringCopy(filePath.toString))
-            else
-              zos.putNextEntry(ZipEntry(entryName))
-              val rawBytes = Files.readAllBytes(filePath)
-              val dataToWrite = key.map(k => Crypto.encrypt(rawBytes, k)).getOrElse(rawBytes)
-              zos.write(dataToWrite)
-              zos.closeEntry()
-              Right(())
-          catch
-            case e: Exception => Left(AppError.StorageIoError(s"Ошибка копирования блоба ${hash.hex}: ${e.getMessage}"))
+          Try(scanner.hashFile(filePath)).toEither
+            .left.map(e => AppError.StorageIoError(s"Ошибка хеширования $filePath: ${e.getMessage}"))
+            .flatMap { currentHash =>
+              if currentHash != hash then Left(AppError.FileChangedDuringCopy(filePath.toString))
+              else
+                Try(Files.readAllBytes(filePath)).toEither
+                  .left.map(e => AppError.StorageIoError(s"Ошибка чтения $filePath: ${e.getMessage}"))
+                  .flatMap { rawBytes =>
+                    val dataToWriteEither = key match
+                      case Some(k) => Crypto.encrypt(rawBytes, k)
+                      case None => Right(rawBytes)
+
+                    dataToWriteEither.flatMap { dataToWrite =>
+                      Try {
+                        zos.putNextEntry(ZipEntry(entryName))
+                        zos.write(dataToWrite)
+                        zos.closeEntry()
+                      }.toEither.left.map(e => AppError.StorageIoError(s"Ошибка записи блоба ${hash.hex}: ${e.getMessage}"))
+                    }
+                  }
+            }
+      }
     }
 
   private def writeSessionJson(zos: ZipOutputStream, session: StorageSession): Either[AppError, Unit] =
-    try
+    Try {
       zos.putNextEntry(ZipEntry("session.json"))
       val jsonBytes = sessionToJson(session).render(indent = 2).getBytes("UTF-8")
       zos.write(jsonBytes)
       zos.closeEntry()
-      Right(())
-    catch
-      case e: Exception => Left(AppError.StorageIoError(s"Ошибка записи session.json: ${e.getMessage}"))
+    }.toEither.left.map(e => AppError.StorageIoError(s"Ошибка записи session.json: ${e.getMessage}"))
 
   private def atomicMove(tempPath: Path, containerPath: Path): Either[AppError, Unit] =
-    try
+    Try {
       Files.move(tempPath, containerPath, StandardCopyOption.REPLACE_EXISTING)
-      Right(())
-    catch
-      case e: Exception => Left(AppError.StorageIoError(s"Ошибка атомарной замены: ${e.getMessage}"))
+      ()
+    }.toEither.left.map(e => AppError.StorageIoError(s"Ошибка атомарной замены: ${e.getMessage}"))
 
   def extractFile(containerPath: Path, hash: Hash, destPath: Path, key: Option[SecretKeySpec]): Either[AppError, Unit] =
     Try {
       Using.resource(ZipFile(containerPath.toFile)) { zip =>
-        val entryName = s"blobs/${hash.hex}"
-        val entry = Option(zip.getEntry(entryName))
-          .getOrElse(throw new RuntimeException(s"Блоб ${hash.hex} не найден в архиве"))
+        for
+          entry <- Option(zip.getEntry(s"blobs/${hash.hex}"))
+            .toRight(AppError.StorageCorrupted(s"Блоб ${hash.hex} не найден в архиве"))
 
-        Option(destPath.getParent).foreach(Files.createDirectories(_))
+          _ = Option(destPath.getParent).foreach(Files.createDirectories(_))
 
-        Using.resource(zip.getInputStream(entry)) { is =>
-          val rawBytes = is.readAllBytes()
-          val dataToWrite = key match
-            case Some(k) => Crypto.decrypt(rawBytes, k).fold(e => throw new RuntimeException(e.message), identity)
-            case None => rawBytes
-          Files.write(destPath, dataToWrite)
-          ()
-        }
+          rawBytes <- Try(Using.resource(zip.getInputStream(entry))(_.readAllBytes()))
+            .toEither.left.map(e => AppError.StorageIoError(s"Ошибка чтения блоба: ${e.getMessage}"))
+
+          dataToWrite <- key.fold[Either[AppError, Array[Byte]]](Right(rawBytes))(k => Crypto.decrypt(rawBytes, k))
+
+          _ <- Try(Files.write(destPath, dataToWrite))
+            .toEither.left.map(e => AppError.StorageIoError(s"Ошибка записи в $destPath: ${e.getMessage}"))
+        yield ()
       }
-    }.toEither.left.map(e => AppError.StorageIoError(s"Ошибка извлечения: ${e.getMessage}"))
+    }.toEither
+      .left.map(e => AppError.StorageIoError(s"Ошибка извлечения: ${e.getMessage}"))
+      .flatMap(identity)

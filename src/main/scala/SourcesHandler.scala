@@ -20,53 +20,68 @@ class SourcesHandler extends CommandHandler:
         ctx.ui.println("0. Назад")
         ctx.ui.print("Выбор: ")
 
-        val updatedSources = ctx.ui.readLineTrimmed() match
-          case "1" =>
-            ctx.ui.println("Введите путь к папке:")
-            val p = Paths.get(ctx.ui.readLineTrimmed())
-            val newId = SourceId(session.sources.map(_.id.value).maxOption.getOrElse(0L) + 1L)
-            ctx.logger.info(s"Добавлен новый источник: $p")
-            session.sources :+ Source(newId, p)
-          case "2" =>
-            ctx.ui.print("Введите номер источника: ")
-            ctx.ui.readLineTrimmed().toIntOption.flatMap(n => session.sources.lift(n - 1)).map { src =>
-              ctx.logger.info(s"Переключен источник: ${src.path}")
-              session.sources.map(s => if s.id == src.id then s.copy(enabled = !s.enabled) else s)
-            }.getOrElse(session.sources)
-          case "3" =>
-            ctx.ui.print("Введите номер источника: ")
-            ctx.ui.readLineTrimmed().toIntOption.flatMap(n => session.sources.lift(n - 1)).map { src =>
-              ctx.logger.info(s"Удален источник: ${src.path}")
-              session.sources.filterNot(_.id == src.id)
-            }.getOrElse(session.sources)
-          case "4" =>
-            ctx.ui.print("Введите номер источника: ")
-            ctx.ui.readLineTrimmed().toIntOption.flatMap(n => session.sources.lift(n - 1)).map { src =>
-              ctx.ui.println(s"Включать вложенные каталоги? (y/n) (сейчас: ${src.recursive}):")
-              val newRec = ctx.ui.readLineTrimmed().toLowerCase == "y"
-              ctx.ui.println(s"Исключения через запятую (сейчас: ${src.exclusions.map(_.pattern).mkString(", ")}):")
-              val exStr = ctx.ui.readLineTrimmed()
-              val newExclusions = if exStr.isEmpty then Nil else exStr.split(",").map(s => Glob(s.trim)).toList
-              ctx.logger.info(s"Изменены настройки источника: ${src.path}")
-              session.sources.map(s => if s.id == src.id then s.copy(recursive = newRec, exclusions = newExclusions) else s)
-            }.getOrElse(session.sources)
-          case _ => session.sources
+        val choice = ctx.ui.readLineTrimmed()
 
-        if updatedSources != session.sources then
-          val updated = session.copy(sources = updatedSources)
-          ctx.storage.saveSession(updated, Map.empty, session.key, ctx.config) match
-            case Right(_) =>
-              ctx.ui.println("Источники обновлены.")
-              ctx.logger.info("Конфигурация источников сохранена")
-              updated.sources.zipWithIndex.foreach { case (s, idx) =>
-                val status = if s.enabled then "включен" else "ОТКЛЮЧЕН"
-                ctx.ui.println(s"  ${idx + 1}. ${s.path} [$status]")
-              }
-            case Left(err) =>
-              ctx.ui.println(s"Ошибка сохранения: ${err.message}")
-              ctx.logger.error(s"Не удалось сохранить источники: ${err.message}")
-          AppState.Opened(updated)
-        else state
+        val actionEither: Either[ParseError, SourceAction] =
+          SourceAction.parseKind(choice).flatMap {
+            case SourceAction.Kind.Add  => Right(SourceAction.Add)
+            case SourceAction.Kind.Back => Right(SourceAction.Back)
+            case kind =>
+              ctx.ui.print("Введите номер источника: ")
+              SourceAction.parseIndex(ctx.ui.readLineTrimmed(), session.sources.size)
+                .map(idx => SourceAction.combine(kind, idx))
+          }
+
+        actionEither match
+          case Left(parseErr) =>
+            ctx.ui.println(ParseErrorRender.render(parseErr))
+            state
+
+          case Right(SourceAction.Back) =>
+            state
+
+          case Right(action) =>
+            val updatedSessionEither: Either[AppError, StorageSession] = action match
+              case SourceAction.Add =>
+                ctx.ui.println("Введите путь к папке:")
+                val p = Paths.get(ctx.ui.readLineTrimmed())
+                BusinessLogic.addSource(session, p)
+
+              case SourceAction.Toggle(idx) =>
+                BusinessLogic.toggleSource(session, idx)
+
+              case SourceAction.Remove(idx) =>
+                BusinessLogic.removeSource(session, idx)
+
+              case SourceAction.Edit(idx) =>
+                val src = session.sources(idx - 1)
+                ctx.ui.println(s"Включать вложенные каталоги? (y/n) (сейчас: ${src.recursive}):")
+                val newRec = ctx.ui.readLineTrimmed().toLowerCase == "y"
+                ctx.ui.println(s"Исключения через запятую (сейчас: ${src.exclusions.map(_.pattern).mkString(", ")}):")
+                val exStr = ctx.ui.readLineTrimmed()
+                val newExclusions = if exStr.isEmpty then Nil else exStr.split(",").map(s => Glob(s.trim)).toList
+                BusinessLogic.editSource(session, idx, newRec, newExclusions)
+
+              case SourceAction.Back => Right(session)
+
+            updatedSessionEither match
+              case Left(err) =>
+                ctx.ui.println(s"Ошибка: ${err.message}")
+                state
+              case Right(updated) =>
+                if updated.sources != session.sources then
+                  ctx.storage.saveSession(updated, Map.empty, session.key, ctx.config) match
+                    case Right(_) =>
+                      ctx.ui.println("Источники обновлены.")
+                      ctx.logger.info("Конфигурация источников сохранена")
+                      updated.sources.zipWithIndex.foreach { case (s, idx) =>
+                        val status = if s.enabled then "включен" else "ОТКЛЮЧЕН"
+                        ctx.ui.println(s"  ${idx + 1}. ${s.path} [$status]")
+                      }
+                    case Left(err) =>
+                      ctx.ui.println(s"Ошибка сохранения: ${err.message}")
+                      ctx.logger.error(s"Не удалось сохранить источники: ${err.message}")
+                AppState.Opened(updated)
 
       case AppState.NoStorage =>
         ctx.ui.println("Сначала откройте или создайте хранилище.")

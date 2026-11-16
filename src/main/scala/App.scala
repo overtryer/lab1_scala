@@ -1,3 +1,5 @@
+import scala.annotation.tailrec
+
 object App:
 
   def run(config: AppConfig, logger: Logger, ui: Ui): Unit =
@@ -15,22 +17,31 @@ object App:
       Command.Restore -> new RestoreHandler,
       Command.Backup -> new BackupHandler
     )
-    var state: AppState = AppState.NoStorage
-    var running = true
-
-    while running do
+    
+    @tailrec
+    def loop(state: AppState): Unit =
       printMenu(ui)
       ui.readLine() match
-        case None => running = false
+        case None =>
+          ()
+
         case Some(line) =>
           Command.parse(line) match
-            case None =>
-              ui.println("Некорректный пункт меню.")
-              logger.warn("Введен неизвестный пункт меню")
-            case Some(Command.Exit) =>
+            case Left(err) =>
+              val msg = ParseErrorRender.render(err)
+              ui.println(msg)
+              logger.warn(s"Некорректный ввод: $msg")
+              loop(state)
+
+            case Right(Command.Exit) =>
               ui.println("До свидания.")
-              running = false
-            case Some(cmd) => state = handleCommand(cmd, state, ctx, handlers)
+              ()
+
+            case Right(cmd) =>
+              val nextState = handleCommand(cmd, state, ctx, handlers)
+              loop(nextState)
+    
+    loop(AppState.NoStorage)
 
   private def handleCommand(cmd: Command, state: AppState, ctx: AppContext, handlers: Map[Command, CommandHandler]): AppState =
     handlers.get(cmd) match
