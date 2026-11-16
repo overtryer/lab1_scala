@@ -16,11 +16,14 @@ enum Command(val title: String):
 object Command:
   val menuItems: List[Command] = Command.values.toList.filterNot(_ == Command.Exit)
   val exitNumber: Int = 0
-  def parse(input: String): Option[Command] =
-    input.trim.toIntOption.flatMap { n =>
-      if n == exitNumber then Some(Command.Exit)
-      else menuItems.lift(n - 1)
-    }
+
+  def parse(input: String): Either[ParseError, Command] =
+    val trimmed = input.trim
+    trimmed.toIntOption match
+      case None => Left(ParseError.NotANumber(trimmed))
+      case Some(n) if n == exitNumber => Right(Command.Exit)
+      case Some(n) =>
+        menuItems.lift(n - 1).toRight(ParseError.OutOfRange(n, menuItems.size))
 
 def printMenu(ui: Ui): Unit =
   ui.println()

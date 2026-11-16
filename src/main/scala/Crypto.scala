@@ -9,29 +9,32 @@ object Crypto:
   private val TAG_LENGTH_BIT = 128
   private val IV_LENGTH_BYTE = 12
   private val random = new SecureRandom()
-  
+
   def generateKey(): Secret =
     val key = new Array[Byte](32)
     random.nextBytes(key)
     Secret(Base64.getEncoder.encodeToString(key))
-  
+
   def parseKey(keyStr: String): Either[AppError, SecretKeySpec] =
+    Try(Base64.getDecoder.decode(keyStr.trim)).toEither
+      .left.map(_ => AppError.WrongKey)
+      .flatMap { decoded =>
+        if decoded.length != 32 then Left(AppError.WrongKey)
+        else Try(SecretKeySpec(decoded, "AES")).toEither.left.map(_ => AppError.WrongKey)
+      }
+
+  def encrypt(data: Array[Byte], key: SecretKeySpec): Either[AppError, Array[Byte]] =
     Try {
-      val decoded = Base64.getDecoder.decode(keyStr.trim)
-      if decoded.length != 32 then throw new IllegalArgumentException("Ключ должен быть длиной 32 байта")
-      SecretKeySpec(decoded, "AES")
-    }.toEither.left.map(_ => AppError.WrongKey)
-  
-  def encrypt(data: Array[Byte], key: SecretKeySpec): Array[Byte] =
-    val iv = new Array[Byte](IV_LENGTH_BYTE)
-    random.nextBytes(iv)
+      val iv = new Array[Byte](IV_LENGTH_BYTE)
+      random.nextBytes(iv)
 
-    val cipher = Cipher.getInstance(ALGORITHM)
-    cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BIT, iv))
+      val cipher = Cipher.getInstance(ALGORITHM)
+      cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BIT, iv))
 
-    val ciphertext = cipher.doFinal(data)
-    iv ++ ciphertext
-  
+      val ciphertext = cipher.doFinal(data)
+      iv ++ ciphertext
+    }.toEither.left.map(e => AppError.StorageIoError(s"Ошибка шифрования: ${e.getMessage}"))
+
   def decrypt(encryptedData: Array[Byte], key: SecretKeySpec): Either[AppError, Array[Byte]] =
     Try {
       val iv = encryptedData.take(IV_LENGTH_BYTE)

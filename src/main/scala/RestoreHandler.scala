@@ -14,18 +14,13 @@ class RestoreHandler extends CommandHandler:
 
           ctx.ui.print("Номер версии: ")
           val vChoice = ctx.ui.readLineTrimmed()
-
-          val manifestToRestore = if vChoice == "0" then
-            Some(session.manifest)
-          else
-            vChoice.toIntOption.flatMap(id => session.versions.find(_.id.value == id).map(_.manifest))
-
-          manifestToRestore match
-            case None =>
-              ctx.ui.println("Неверный номер версии.")
-              ctx.logger.warn("Ошибка восстановления: выбран неверный номер версии")
+          
+          BusinessLogic.resolveManifest(session, vChoice) match
+            case Left(err) =>
+              ctx.ui.println(err.message)
+              ctx.logger.warn(s"Ошибка восстановления: ${err.message}")
               state
-            case Some(targetManifest) =>
+            case Right(targetManifest) =>
               ctx.ui.println("Каталог назначения:")
               val destRoot = Paths.get(ctx.ui.readLineTrimmed())
               ctx.logger.info(s"Начало восстановления в $destRoot")
@@ -33,15 +28,14 @@ class RestoreHandler extends CommandHandler:
               val (restoredCount, skippedCount) = targetManifest.files.values.foldLeft((0, 0)) {
                 case ((restored, skipped), entry) =>
                   val destPath = destRoot.resolve(entry.relPath.value)
-                  if Files.exists(destPath) && ctx.config.confirmBeforeRestoreOverwrite then {
+                  if Files.exists(destPath) && ctx.config.confirmBeforeRestoreOverwrite then
                     ctx.ui.print(s"'${entry.relPath.value}' существует. Перезаписать? (y/n): ")
                     if ctx.ui.readLineTrimmed().toLowerCase != "y" then
                       ctx.logger.info(s"Восстановление пропущено: ${entry.relPath.value}")
                       (restored, skipped + 1)
                     else doRestore(session, entry, destPath, restored, skipped, ctx)
-                  } else {
+                  else
                     doRestore(session, entry, destPath, restored, skipped, ctx)
-                  }
               }
               ctx.ui.println(s"Восстановлено: $restoredCount, Пропущено: $skippedCount")
               ctx.logger.info(s"Восстановление завершено. Успешно: $restoredCount, Пропущено: $skippedCount")

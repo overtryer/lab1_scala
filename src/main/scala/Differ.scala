@@ -16,13 +16,10 @@ object Differ:
         Change.Modified(prevFiles(key), currFiles(key))
     }
 
-    val (renamed, removed) = rawRemoved.foldLeft((List.empty[Change], List.empty[Change])) {
-      case ((accRenamed, accRemoved), oldEntry) =>
-        rawAdded.find(newEntry => newEntry.hash == oldEntry.hash && newEntry.size == oldEntry.size) match
-          case Some(matchedNew) =>
-            (Change.Renamed(oldEntry, matchedNew) :: accRenamed, accRemoved)
-          case None =>
-            (accRenamed, Change.Removed(oldEntry) :: accRemoved)
+    val (removed, renamed) = rawRemoved.partitionMap { oldEntry =>
+      rawAdded.find(newEntry => newEntry.hash == oldEntry.hash && newEntry.size == oldEntry.size)
+        .map(matchedNew => Right(Change.Renamed(oldEntry, matchedNew)))
+        .getOrElse(Left(Change.Removed(oldEntry)))
     }
 
     val renamedNewHashes = renamed.collect { case Change.Renamed(_, curr) => curr.hash }.toSet

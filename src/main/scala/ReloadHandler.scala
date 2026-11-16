@@ -5,10 +5,10 @@ class ReloadHandler extends CommandHandler:
 
   def execute(state: AppState, ctx: AppContext): AppState =
     ctx.ui.println("Перезагрузка конфигурации...")
-    ConfigLoader.load(configPath) match
-      case Right(newCfg) =>
+    BusinessLogic.reload(configPath) match
+      case Right((newCfg, newScanner)) =>
         ctx.config = newCfg
-        ctx.scanner = new Scanner(newCfg.hashAlgorithm)
+        ctx.scanner = newScanner
         ctx.ui.println("Конфигурация перезагружена и применена.")
         ctx.logger.info("Конфигурация перезагружена и применена")
         state

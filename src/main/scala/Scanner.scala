@@ -48,9 +48,7 @@ class Scanner(hashAlgorithm: String):
             }.toEither.left.map(e => Change.Unreadable(source.id, rel, e.getMessage))
           }
 
-          val files = entriesOrErrors.collect { case Right(entry) => entry }
-          val errors = entriesOrErrors.collect { case Left(change) => change }
-
+          val (errors, files) = entriesOrErrors.partitionMap(identity)
           (files, errors)
 
   def hashFile(path: Path): Hash =
