@@ -26,8 +26,8 @@ object SourceAction:
       case Some(n) => Right(n)
   
   def combine(kind: Kind, index: Int): SourceAction = kind match
-    case Kind.Add    => SourceAction.Add
+    case Kind.Add => SourceAction.Add
     case Kind.Toggle => SourceAction.Toggle(index)
     case Kind.Remove => SourceAction.Remove(index)
-    case Kind.Edit   => SourceAction.Edit(index)
-    case Kind.Back   => SourceAction.Back
+    case Kind.Edit => SourceAction.Edit(index)
+    case Kind.Back => SourceAction.Back

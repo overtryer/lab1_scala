@@ -105,8 +105,7 @@ object Storage:
     "versions" -> ujson.Arr.from(s.versions.map(versionToJson)),
     "sources" -> ujson.Arr.from(s.sources.map(sourceToJson))
   )
-
-  // path теперь передается явно, null больше не нужен
+  
   private def sessionFromJson(j: ujson.Value, path: Path): StorageSession =
     val o = j.obj
     StorageSession(

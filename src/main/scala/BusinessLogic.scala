@@ -24,7 +24,6 @@ object BusinessLogic:
       "Доступные версии:" :: versions.map { v =>
         val dateStr = v.createdAt.toString.take(19).replace("T", " ")
         val filesCount = v.manifest.files.size
-        // Используем .formatted() вместо f-интерполятора во избежание warning-ов
         s"Версия ${v.id.value.toInt.formatted("%3d")} | $dateStr | Файлов: ${filesCount.formatted("%3d")} | +${v.added} ~${v.modified} -${v.removed}"
       }
 

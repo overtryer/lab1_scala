@@ -5,15 +5,13 @@ class OpenHandler extends CommandHandler:
     ctx.logger.info("Попытка открытия хранилища")
     ctx.ui.println("Введите путь к файлу хранилища:")
     val path = Paths.get(ctx.ui.readLineTrimmed())
-
-    // Используем доменную функцию для открытия без ключа
+    
     BusinessLogic.openSession(ctx.storage, path) match
       case Right(sessionWithoutKey) =>
         if sessionWithoutKey.encrypted then
           ctx.ui.println("Введите ключ доступа:")
           val keyInput = ctx.ui.readLineTrimmed()
-
-          // Используем доменную функцию для открытия с ключом
+          
           BusinessLogic.openEncryptedSession(ctx.storage, path, keyInput) match
             case Right(finalSession) =>
               ctx.ui.println(s"Хранилище '${finalSession.name}' открыто.")
